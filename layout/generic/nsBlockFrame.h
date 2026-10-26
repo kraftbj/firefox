@@ -614,6 +614,9 @@ class nsBlockFrame : public nsContainerFrame {
     int32_t mNaturalBreakLineIndex = -1;
     // [out] Whether at least 'widows' lines follow the natural break.
     bool mWidowsSatisfied = false;
+    // [out] Whether our first line didn't fit, in which case our parent will
+    // push us.
+    bool mFirstLineOverflowed = false;
     // Results computed during the trial reflow. Values from the final trial
     // will be used by the remainder of Reflow().
     mozilla::OverflowAreas mOcBounds;
@@ -637,6 +640,7 @@ class nsBlockFrame : public nsContainerFrame {
       mUsedOverflowWrap = false;
       mNaturalBreakLineIndex = -1;
       mWidowsSatisfied = false;
+      mFirstLineOverflowed = false;
     }
 
     // Adjust the inset amount, and reset state for a new trial.
@@ -672,10 +676,12 @@ class nsBlockFrame : public nsContainerFrame {
    * After a trial reflow with mCheckWidowsOrphans that broke between inline
    * lines, returns the index in mLines of the line to break before so that
    * 'widows' and 'orphans' are honored as far as possible, or -1 to keep the
-   * natural break.
+   * natural break. aViolated is set to true if the result still violates
+   * 'widows' or 'orphans'.
    */
   int32_t ComputeWidowsOrphansBreakLine(const TrialReflowState& aTrialState,
-                                        const nsReflowStatus& aStatus);
+                                        const nsReflowStatus& aStatus,
+                                        bool& aViolated);
 
  public:
   /**

@@ -420,6 +420,7 @@ class BlockReflowState {
   int32_t mNaturalBreakLineIndex = -1;
   int32_t mLinesFromNaturalBreak = 0;
   bool mWidowsSatisfied = false;
+  bool mFirstLineOverflowed = false;
 
   Flags mFlags;
 

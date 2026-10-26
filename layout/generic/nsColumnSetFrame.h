@@ -83,9 +83,15 @@ class nsColumnSetFrame final : public nsContainerFrame {
   // the first/last child (see nsCSSFrameConstructor::ConstructBlock).
   bool IsEmpty() override;
 
+  // Called by descendant blocks during a non-final balancing reflow when they
+  // had to break in a way that violates 'widows' or 'orphans'. This makes the
+  // current column block-size infeasible.
+  void NoteWidowsOrphansViolation() { mHasWidowsOrphansViolation = true; }
+
  protected:
   nscoord mLastBalanceBSize;
   nsReflowStatus mLastFrameStatus;
+  bool mHasWidowsOrphansViolation = false;
 
   /**
    * These are the parameters that control the layout of columns.

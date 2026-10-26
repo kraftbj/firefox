@@ -471,6 +471,7 @@ nsColumnSetFrame::ColumnBalanceData nsColumnSetFrame::ReflowColumns(
     bool aUnboundedLastColumn) {
   ColumnBalanceData colData;
   bool allFit = true;
+  mHasWidowsOrphansViolation = false;
   WritingMode wm = GetWritingMode();
   const bool isRTL = wm.IsBidiRTL();
   const bool shrinkingBSize = mLastBalanceBSize > aConfig.mColBSize;
@@ -939,7 +940,8 @@ nsColumnSetFrame::ColumnBalanceData nsColumnSetFrame::ReflowColumns(
     aDesiredSize.UnionOverflowAreasWithDesiredBounds();
   }
 
-  colData.mFeasible = allFit && aStatus.IsFullyComplete();
+  colData.mFeasible =
+      allFit && aStatus.IsFullyComplete() && !mHasWidowsOrphansViolation;
 
   COLUMN_SET_LOG(
       "%s: Done column reflow pass: %s, mMaxBSize=%d, mSumBSize=%d, "
@@ -1043,7 +1045,7 @@ void nsColumnSetFrame::FindBestBalanceBSize(const ReflowInput& aReflowInput,
       aConfig.mKnownInfeasibleBSize = std::max(
           aConfig.mKnownInfeasibleBSize, aColData.mMaxOverflowingBSize - 1);
 
-      if (aUnboundedLastColumn) {
+      if (aUnboundedLastColumn && !mHasWidowsOrphansViolation) {
         // The last column is unbounded, so all content got reflowed, so the
         // mMaxBSize is feasible.
         aConfig.mKnownFeasibleBSize =

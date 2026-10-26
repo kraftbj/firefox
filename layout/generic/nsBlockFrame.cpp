@@ -45,6 +45,7 @@
 #include "nsCRT.h"
 #include "nsCSSFrameConstructor.h"
 #include "nsCSSRendering.h"
+#include "nsColumnSetFrame.h"
 #include "nsDisplayList.h"
 #include "nsError.h"
 #include "nsFirstLetterFrame.h"
@@ -1622,6 +1623,27 @@ Maybe<OverflowAreas> nsBlockFrame::ReflowAbsoluteFramesInInlineFrame(
   return Some(absposOverflow);
 }
 
+// Returns the column set doing a non-final balancing reflow of the column that
+// contains the frame of aReflowInput, if any.
+static nsColumnSetFrame* GetBalancingColumnSet(
+    const ReflowInput& aReflowInput) {
+  for (const ReflowInput* ri = &aReflowInput; ri; ri = ri->mParentReflowInput) {
+    if (ri->mFrame->Style()->GetPseudoType() !=
+        PseudoStyleType::MozColumnContent) {
+      continue;
+    }
+    if (!ri->mFlags.mIsColumnBalancing ||
+        ri->mFlags.mIsInLastColumnBalancingReflow) {
+      return nullptr;
+    }
+    nsIFrame* parent = ri->mFrame->GetParent();
+    return parent && parent->IsColumnSetFrame()
+               ? static_cast<nsColumnSetFrame*>(parent)
+               : nullptr;
+  }
+  return nullptr;
+}
+
 void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
                           const ReflowInput& aReflowInput,
                           nsReflowStatus& aStatus) {
@@ -1920,8 +1942,14 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   if (trialState.mCheckWidowsOrphans) {
     trialState.mCheckWidowsOrphans = false;
     if (trialState.mNaturalBreakLineIndex >= 0) {
+      bool violated = false;
       trialState.mForcedBreakLineIndex =
-          ComputeWidowsOrphansBreakLine(trialState, reflowStatus);
+          ComputeWidowsOrphansBreakLine(trialState, reflowStatus, violated);
+      if (violated && !trialState.mFirstLineOverflowed) {
+        if (nsColumnSetFrame* columnSet = GetBalancingColumnSet(aReflowInput)) {
+          columnSet->NoteWidowsOrphansViolation();
+        }
+      }
       trialState.mRedoAfterCheckingWidowsOrphans = true;
       trialState.Reset();
       aReflowInput.mFloatManager->PopState(&floatManagerState);
@@ -2151,7 +2179,8 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
 }
 
 int32_t nsBlockFrame::ComputeWidowsOrphansBreakLine(
-    const TrialReflowState& aTrialState, const nsReflowStatus& aStatus) {
+    const TrialReflowState& aTrialState, const nsReflowStatus& aStatus,
+    bool& aViolated) {
   const int32_t naturalIndex = aTrialState.mNaturalBreakLineIndex;
   MOZ_ASSERT(naturalIndex >= 0);
 
@@ -2213,7 +2242,11 @@ int32_t nsBlockFrame::ComputeWidowsOrphansBreakLine(
     return -1;
   }
   if (linesBefore < orphans) {
-    return hasBlockBefore ? runStartIndex : -1;
+    if (hasBlockBefore) {
+      return runStartIndex;
+    }
+    aViolated = true;
+    return -1;
   }
   if (linesAfter >= widows) {
     return -1;
@@ -2227,6 +2260,7 @@ int32_t nsBlockFrame::ComputeWidowsOrphansBreakLine(
   }
   // Both can't be honored; keep 'orphans' and move the break as far as it
   // allows.
+  aViolated = true;
   const int32_t index = indexAfterLines(orphans);
   return index < naturalIndex ? index : -1;
 }
@@ -2319,6 +2353,7 @@ nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
   aTrialState.mUsedOverflowWrap = ReflowDirtyLines(state);
   aTrialState.mNaturalBreakLineIndex = state.mNaturalBreakLineIndex;
   aTrialState.mWidowsSatisfied = state.mWidowsSatisfied;
+  aTrialState.mFirstLineOverflowed = state.mFirstLineOverflowed;
 
   // If we have a next-in-flow, and that next-in-flow has pushed floats from
   // this frame from a previous iteration of reflow, then we should not return
@@ -6416,6 +6451,11 @@ bool nsBlockFrame::PlaceLine(BlockReflowState& aState,
   const bool lineFits = mLines.front() == aLine ||
                         aState.ContentBSize() == NS_UNCONSTRAINEDSIZE ||
                         newBCoord <= aState.ContentBEnd();
+  if (mLines.front() == aLine && aState.mCheckWidowsOrphans) {
+    aState.mFirstLineOverflowed =
+        aState.ContentBSize() != NS_UNCONSTRAINEDSIZE &&
+        newBCoord > aState.ContentBEnd();
+  }
   int32_t lineIndex = -1;
   if (!lineFits || aState.mForcedBreakLineIndex >= 0) {
     lineIndex = 0;
