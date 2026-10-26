@@ -12117,6 +12117,13 @@
   mirror: always
   rust: true
 
+# Are the 'widows' and 'orphans' properties enabled?
+- name: layout.css.widows-orphans.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+  rust: true
+
 # Does webkit-line-clamp skip painting clamped lines?
 # See bug 1934547.
 - name: layout.css.webkit-line-clamp.skip-paint

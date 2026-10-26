@@ -1289,6 +1289,9 @@ struct MOZ_NEEDS_MEMMOVABLE_MEMBERS nsStyleText {
   mozilla::StyleTextWrapStyle mTextWrapStyle =
       mozilla::StyleTextWrapStyle::Auto;
 
+  int32_t mOrphans = 2;
+  int32_t mWidows = 2;
+
   char16_t TextSecurityMaskChar() const {
     switch (mWebkitTextSecurity) {
       case mozilla::StyleTextSecurity::None:

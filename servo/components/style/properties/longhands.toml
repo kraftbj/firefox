@@ -1511,6 +1511,17 @@ spec = "https://drafts.csswg.org/css-flexbox/#order-property"
 servo_restyle_damage = "rebuild_box"
 affects = "layout"
 
+[orphans]
+type = "Integer"
+initial = "2"
+struct = "inherited_text"
+engine = "gecko"
+parse_method = "parse_positive"
+gecko_pref = "layout.css.widows-orphans.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-break/#propdef-orphans"
+affects = "layout"
+
 [outline-color]
 type = "Color"
 initial = "computed_value::T::currentcolor()"
@@ -2459,6 +2470,17 @@ type = "LengthPercentage"
 initial = "computed::LengthPercentage::zero()"
 struct = "svg"
 spec = "https://svgwg.org/svg2-draft/geometry.html#Y"
+affects = "layout"
+
+[widows]
+type = "Integer"
+initial = "2"
+struct = "inherited_text"
+engine = "gecko"
+parse_method = "parse_positive"
+gecko_pref = "layout.css.widows-orphans.enabled"
+has_effect_on_gecko_scrollbars = false
+spec = "https://drafts.csswg.org/css-break/#propdef-widows"
 affects = "layout"
 
 [width]

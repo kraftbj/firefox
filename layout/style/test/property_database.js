@@ -12497,6 +12497,22 @@ if (IsCSSPropertyPrefEnabled("layout.css.line-clamp.enabled")) {
   gCSSProperties["-webkit-line-clamp"].subproperties = [];
 }
 
+if (IsCSSPropertyPrefEnabled("layout.css.widows-orphans.enabled")) {
+  for (const [prop, domProp] of [
+    ["orphans", "orphans"],
+    ["widows", "widows"],
+  ]) {
+    gCSSProperties[prop] = {
+      domProp,
+      inherited: true,
+      type: CSS_TYPE_LONGHAND,
+      initial_values: ["2"],
+      other_values: ["1", "3", "99999", "calc(1 + 2)"],
+      invalid_values: ["0", "-1", "1.5", "1px", "auto", "none"],
+    };
+  }
+}
+
 // Get the computed value for a property.  For shorthands, return the
 // computed values of all the subproperties, delimited by " ; ".
 function get_computed_value(cs, property) {
