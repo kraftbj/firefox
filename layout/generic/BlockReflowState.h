@@ -414,6 +414,13 @@ class BlockReflowState {
   // text-box-trim may affect which lines fit in the current fragment.
   bool mNeedsTextBoxTrimAtFragmentEndRetry = false;
 
+  // widows/orphans support. See nsBlockFrame::TrialReflowState.
+  bool mCheckWidowsOrphans = false;
+  int32_t mForcedBreakLineIndex = -1;
+  int32_t mNaturalBreakLineIndex = -1;
+  int32_t mLinesFromNaturalBreak = 0;
+  bool mWidowsSatisfied = false;
+
   Flags mFlags;
 
   // Cache the result of nsBlockFrame::FindTrailingClear() from mBlock's

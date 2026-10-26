@@ -1813,6 +1813,10 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   nsFloatManager::SavedState floatManagerState;
   TrialReflowState trialState(consumedBSize, effectiveContentBoxBSize,
                               needFloatManager);
+  trialState.mCheckWidowsOrphans =
+      StaticPrefs::layout_css_widows_orphans_enabled() && !tryBalance &&
+      aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE &&
+      !ShouldAvoidBreakInside(aReflowInput);
 
   // text-wrap: balance loop, executed only once if balancing is not required.
   while (true) {
@@ -1910,6 +1914,23 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     // going to keep. So the saved state is just dropped.
     break;
   }  // End of text-wrap: balance retry loop
+
+  // If the checking trial broke between lines, reflow again for real, moving
+  // the break earlier if needed to honor 'widows' and 'orphans'.
+  if (trialState.mCheckWidowsOrphans) {
+    trialState.mCheckWidowsOrphans = false;
+    if (trialState.mNaturalBreakLineIndex >= 0) {
+      trialState.mForcedBreakLineIndex =
+          ComputeWidowsOrphansBreakLine(trialState, reflowStatus);
+      trialState.mRedoAfterCheckingWidowsOrphans = true;
+      trialState.Reset();
+      aReflowInput.mFloatManager->PopState(&floatManagerState);
+      aReflowInput.mFloatManager->PushState(&floatManagerState);
+      aMetrics = ReflowOutput(aMetrics.GetWritingMode());
+      reflowStatus =
+          TrialReflow(aPresContext, aMetrics, aReflowInput, trialState);
+    }
+  }
 
   // Handle the text-box-trim end retry, if the frame requested a second pass
   // in order to properly trim a line at a fragment boundary.
@@ -2129,6 +2150,87 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
 #endif
 }
 
+int32_t nsBlockFrame::ComputeWidowsOrphansBreakLine(
+    const TrialReflowState& aTrialState, const nsReflowStatus& aStatus) {
+  const int32_t naturalIndex = aTrialState.mNaturalBreakLineIndex;
+  MOZ_ASSERT(naturalIndex >= 0);
+
+  // The natural break line may have been pushed already, in which case
+  // natural is LinesEnd().
+  LineIterator natural = LinesBegin();
+  int32_t i = 0;
+  for (; i < naturalIndex && natural != LinesEnd(); ++i) {
+    ++natural;
+  }
+  if (i != naturalIndex || natural == LinesBegin()) {
+    return -1;
+  }
+
+  // Find the start of the inline formatting run containing the natural break,
+  // and count the non-empty lines placed before the break.
+  LineIterator runStart = natural;
+  int32_t runStartIndex = naturalIndex;
+  int32_t linesBefore = 0;
+  while (runStart != LinesBegin() && !runStart.prev()->IsBlock()) {
+    --runStart;
+    --runStartIndex;
+    if (!runStart->CachedIsEmpty()) {
+      ++linesBefore;
+    }
+  }
+  const bool hasBlockBefore = runStart != LinesBegin();
+
+  // Count the lines after the break, if the trial got to the end of the run.
+  int32_t linesAfter = INT32_MAX;
+  if (!aTrialState.mWidowsSatisfied) {
+    int32_t count = 0;
+    LineIterator iter = natural;
+    for (; iter != LinesEnd() && !iter->IsBlock(); ++iter) {
+      if (!iter->CachedIsEmpty()) {
+        ++count;
+      }
+    }
+    if (iter != LinesEnd() || aStatus.IsComplete()) {
+      linesAfter = count;
+    }
+  }
+
+  // Returns the index of the line that follows the first aCount non-empty
+  // lines of the run.
+  auto indexAfterLines = [&](int32_t aCount) {
+    int32_t index = runStartIndex;
+    for (LineIterator iter = runStart; aCount > 0; ++iter, ++index) {
+      if (!iter->CachedIsEmpty()) {
+        --aCount;
+      }
+    }
+    return index;
+  };
+
+  const int32_t orphans = StyleText()->mOrphans;
+  const int32_t widows = StyleText()->mWidows;
+  if (linesBefore == 0) {
+    return -1;
+  }
+  if (linesBefore < orphans) {
+    return hasBlockBefore ? runStartIndex : -1;
+  }
+  if (linesAfter >= widows) {
+    return -1;
+  }
+  const int32_t newLinesBefore = linesBefore - (widows - linesAfter);
+  if (newLinesBefore >= orphans) {
+    return indexAfterLines(newLinesBefore);
+  }
+  if (hasBlockBefore) {
+    return runStartIndex;
+  }
+  // Both can't be honored; keep 'orphans' and move the break as far as it
+  // allows.
+  const int32_t index = indexAfterLines(orphans);
+  return index < naturalIndex ? index : -1;
+}
+
 nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
                                          ReflowOutput& aMetrics,
                                          const ReflowInput& aReflowInput,
@@ -2168,6 +2270,8 @@ nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
                          aTrialState.mConsumedBSize,
                          aTrialState.mEffectiveContentBoxBSize,
                          aTrialState.mInset);
+  state.mCheckWidowsOrphans = aTrialState.mCheckWidowsOrphans;
+  state.mForcedBreakLineIndex = aTrialState.mForcedBreakLineIndex;
 
   // Handle paginated overflow (see nsContainerFrame.h)
   nsReflowStatus ocStatus;
@@ -2204,7 +2308,8 @@ nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
 
   // For text-wrap:balance trials, we need to reflow all the inline lines even
   // if they're not all "dirty", but we don't need to reflow any block lines.
-  if (aTrialState.mBalancing) {
+  if (aTrialState.mBalancing || aTrialState.mCheckWidowsOrphans ||
+      aTrialState.mRedoAfterCheckingWidowsOrphans) {
     MarkAllInlineLinesDirty(this);
   } else {
     LazyMarkLinesDirty();
@@ -2212,6 +2317,8 @@ nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
 
   // Now reflow...
   aTrialState.mUsedOverflowWrap = ReflowDirtyLines(state);
+  aTrialState.mNaturalBreakLineIndex = state.mNaturalBreakLineIndex;
+  aTrialState.mWidowsSatisfied = state.mWidowsSatisfied;
 
   // If we have a next-in-flow, and that next-in-flow has pushed floats from
   // this frame from a previous iteration of reflow, then we should not return
@@ -6306,9 +6413,68 @@ bool nsBlockFrame::PlaceLine(BlockReflowState& aState,
   }
 
   // See if the line fit (our first line always does).
-  if (mLines.front() != aLine &&
-      aState.ContentBSize() != NS_UNCONSTRAINEDSIZE &&
-      newBCoord > aState.ContentBEnd()) {
+  const bool lineFits = mLines.front() == aLine ||
+                        aState.ContentBSize() == NS_UNCONSTRAINEDSIZE ||
+                        newBCoord <= aState.ContentBEnd();
+  int32_t lineIndex = -1;
+  if (!lineFits || aState.mForcedBreakLineIndex >= 0) {
+    lineIndex = 0;
+    for (auto iter = mLines.begin(); iter != aLine; ++iter) {
+      ++lineIndex;
+    }
+  }
+  const bool isForcedBreak = aState.mForcedBreakLineIndex >= 0 &&
+                             lineIndex == aState.mForcedBreakLineIndex;
+  bool shouldBreak = !lineFits || isForcedBreak;
+  bool breakBeforeForOrphans = false;
+  // Like Blink, don't apply 'widows' and 'orphans' to a break caused by
+  // clearance after a line (e.g. <br clear>).
+  const bool isBreakAfterClear =
+      aLine != LinesBegin() && aLine.prev()->HasFloatClearTypeAfter();
+  if (shouldBreak && !isForcedBreak && aState.mCheckWidowsOrphans &&
+      (aState.mNaturalBreakLineIndex >= 0 || !isBreakAfterClear)) {
+    if (aState.mNaturalBreakLineIndex < 0) {
+      // If too few lines would be left behind and nothing precedes them in
+      // this block, break before the whole block instead, if we can.
+      int32_t linesBefore = 0;
+      bool hasBlockBefore = false;
+      for (auto iter = aLine; iter != mLines.begin();) {
+        --iter;
+        if (iter->IsBlock()) {
+          hasBlockBefore = true;
+          break;
+        }
+        if (!iter->CachedIsEmpty()) {
+          ++linesBefore;
+        }
+      }
+      const nsIFrame* prevSibling = GetPrevSibling();
+      breakBeforeForOrphans =
+          linesBefore > 0 && linesBefore < StyleText()->mOrphans &&
+          !hasBlockBefore && !aState.mReflowInput.mFlags.mIsTopOfPage &&
+          !GetPrevInFlow() &&
+          Style()->GetPseudoType() != PseudoStyleType::MozColumnContent &&
+          !IsAbsolutelyPositioned() &&
+          StyleDisplay()->mBreakBefore != StyleBreakBetween::Avoid &&
+          (!prevSibling || prevSibling->StyleDisplay()->mBreakAfter !=
+                               StyleBreakBetween::Avoid);
+      if (!breakBeforeForOrphans) {
+        aState.mNaturalBreakLineIndex = lineIndex;
+      }
+    }
+    if (!breakBeforeForOrphans) {
+      // Keep placing lines past the fragment end until we know whether enough
+      // of them remain to satisfy 'widows'.
+      if (!aLine->CachedIsEmpty()) {
+        ++aState.mLinesFromNaturalBreak;
+      }
+      aState.mWidowsSatisfied =
+          aState.mLinesFromNaturalBreak >= StyleText()->mWidows;
+      shouldBreak = aState.mWidowsSatisfied;
+    }
+  }
+
+  if (shouldBreak) {
     NS_ASSERTION(aState.mCurrentLine == aLine, "oops");
 
     // If the line doesn't fit, but this block should be trimmed on the
@@ -6316,7 +6482,7 @@ bool nsBlockFrame::PlaceLine(BlockReflowState& aState,
     // would have made the line fit. If so, request a retry with that
     // line forced to trim; otherwise, the previous line was the last
     // formatted line of this fragment and should be trimmed.
-    if (aState.mFlags.mShouldApplyTextBoxTrimAtFragmentEnd &&
+    if (!lineFits && aState.mFlags.mShouldApplyTextBoxTrimAtFragmentEnd &&
         !aLine->TextBoxTrimEndApplied()) {
       const nscoord potentialTrimEndAmount =
           aLineLayout.PotentialTextBoxTrimEndAmount();
@@ -6327,13 +6493,17 @@ bool nsBlockFrame::PlaceLine(BlockReflowState& aState,
       aState.mNeedsTextBoxTrimAtFragmentEndRetry = true;
     }
 
-    if (ShouldAvoidBreakInside(aState.mReflowInput)) {
+    if (ShouldAvoidBreakInside(aState.mReflowInput) || breakBeforeForOrphans) {
       // All our content doesn't fit, start on the next page.
       SetBreakBeforeStatusBeforeLine(aState, aLine, aKeepReflowGoing);
     } else {
       // Push aLine and all of its children and anything else that
-      // follows to our next-in-flow.
-      PushTruncatedLine(aState, aLine, aKeepReflowGoing);
+      // follows to our next-in-flow. While checking widows, this isn't the
+      // final break, so leave the next page name alone.
+      PushTruncatedLine(aState, aLine, aKeepReflowGoing,
+                        aState.mCheckWidowsOrphans
+                            ? ComputeNewPageNameIfNeeded::No
+                            : ComputeNewPageNameIfNeeded::Yes);
     }
     return true;
   }
